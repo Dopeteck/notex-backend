@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const db = require('./db'); // This already handles the connection!
 require('dotenv').config();
 
 const app = express();
@@ -11,15 +12,15 @@ const PORT = process.env.PORT || 8080;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: '*',
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.raw({ type: 'application/json', limit: '10mb' })); // For Stripe webhooks
+app.use(express.raw({ type: 'application/json', limit: '10mb' }));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100
 });
 app.use('/api/', limiter);
@@ -28,6 +29,9 @@ app.use('/api/', limiter);
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+const path = require('path');
+app.use('/files', express.static(path.join(process.env.FILES_DIR || '/data/files')));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -46,7 +50,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 NoteX API running on port ${PORT}`);
 });
 
