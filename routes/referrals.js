@@ -2,9 +2,9 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { authenticateUser } = require('./auth');
+const { authenticateUser } = require('../middleware/auth');
 
-// Apply referral code
+// Apply referral code - ONLY ONCE!
 router.post('/apply', authenticateUser, async (req, res) => {
   try {
     const { referral_code } = req.body;
@@ -14,8 +14,20 @@ router.post('/apply', authenticateUser, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Referral code is required' });
     }
 
+    // Get user's referral code from database
+    const userResult = await db.query(
+      'SELECT referral_code FROM users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'User not found' });
+    }
+    
+    const userReferralCode = userResult.rows[0].referral_code;
+
     // Can't use own referral code
-    if (req.user.referral_code === referral_code) {
+    if (userReferralCode === referral_code) {
       return res.status(400).json({ success: false, error: 'Cannot use your own referral code' });
     }
 
@@ -78,7 +90,7 @@ router.post('/apply', authenticateUser, async (req, res) => {
 
       // Get updated user data
       const updatedUser = await db.query(
-        'SELECT * FROM users WHERE id = $1',
+        'SELECT id, username, email, referral_code, referrals_count, credits, wallet_balance, plan, premium_until FROM users WHERE id = $1',
         [userId]
       );
 
@@ -86,7 +98,9 @@ router.post('/apply', authenticateUser, async (req, res) => {
         success: true,
         message: 'Referral applied successfully! +3 credits added.',
         user: updatedUser.rows[0],
-        bonus: 3
+        bonus: 3,
+        referrals_count: updatedUser.rows[0].referrals_count,
+        premium_until: updatedUser.rows[0].premium_until
       });
 
     } catch (error) {
@@ -105,31 +119,39 @@ router.get('/stats', authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // Get user data from database (not from JWT token)
+    const userResult = await db.query(
+      'SELECT referral_code, referrals_count, premium_until FROM users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    const user = userResult.rows[0];
+
     const stats = await db.query(`
       SELECT 
-        u.referrals_count,
-        u.referral_code,
         COUNT(r.id) as successful_referrals,
         COALESCE(SUM(r.reward_credits), 0) as total_credits_earned
-      FROM users u
-      LEFT JOIN referrals r ON u.id = r.referrer_id
-      WHERE u.id = $1
-      GROUP BY u.id, u.referrals_count, u.referral_code
+      FROM referrals r
+      WHERE r.referrer_id = $1
     `, [userId]);
 
-    const referralsNeeded = Math.max(0, 3 - (stats.rows[0]?.referrals_count || 0));
-    const isPremium = req.user.premium_until && new Date(req.user.premium_until) > new Date();
+    const referralsNeeded = Math.max(0, 3 - (user.referrals_count || 0));
+    const isPremium = user.premium_until && new Date(user.premium_until) > new Date();
 
     res.json({
       success: true,
       stats: {
-        referral_code: req.user.referral_code,
-        referrals_count: stats.rows[0]?.referrals_count || 0,
+        referral_code: user.referral_code,
+        referrals_count: user.referrals_count || 0,
         successful_referrals: stats.rows[0]?.successful_referrals || 0,
         total_credits_earned: stats.rows[0]?.total_credits_earned || 0,
         referrals_needed: referralsNeeded,
         has_premium: isPremium,
-        premium_until: req.user.premium_until
+        premium_until: user.premium_until
       }
     });
 
@@ -140,19 +162,36 @@ router.get('/stats', authenticateUser, async (req, res) => {
 });
 
 // Generate referral link (Updated for Firebase)
-router.get('/link', authenticateUser, (req, res) => {
-  // For Firebase Hosting - use environment variable or common patterns
-  const baseUrl = process.env.FRONTEND_URL || 
-                  'https://notex-app.web.app'; // Common Firebase pattern
-  
-  const referralLink = `${baseUrl}?ref=${req.user.referral_code}`;
-  
-  res.json({
-    success: true,
-    referral_code: req.user.referral_code,
-    referral_link: referralLink,
-    instructions: 'Share this code with friends! They can enter it in the app.'
-  });
+router.get('/link', authenticateUser, async (req, res) => {
+  try {
+    // Get user's referral code from database
+    const userResult = await db.query(
+      'SELECT referral_code FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    const referralCode = userResult.rows[0].referral_code;
+    
+    // For Firebase Hosting
+    const baseUrl = process.env.FRONTEND_URL || 
+                    'https://notex-app.web.app';
+    
+    const referralLink = `${baseUrl}?ref=${referralCode}`;
+    
+    res.json({
+      success: true,
+      referral_code: referralCode,
+      referral_link: referralLink,
+      instructions: 'Share this code with friends! They can enter it in the app.'
+    });
+  } catch (error) {
+    console.error('Referral link error:', error);
+    res.status(500).json({ success: false, error: 'Failed to generate referral link' });
+  }
 });
 
 module.exports = router;

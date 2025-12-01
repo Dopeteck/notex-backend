@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, Brain, ShoppingBag, Upload, Zap, Calculator, Clock, TrendingUp, Star, Search, Filter, DollarSign, Award, Users, Gift, Trophy, Target, Flame, Play, Pause, RotateCcw } from 'lucide-react';
 
-const API_URL = process.env.REACT_APP_API_URL || 'https://notex-api-production.up.railway.app';
+// 🔧 FIX: Define API URLs
+const API_URL = "https://notex-api-production.up.railway.app";
+const API_BASE_URL = `${API_URL}/api`;
+
+// Test connection:
+fetch(`${API_BASE_URL}/health-check`)
+  .then(res => res.json())
+  .then(data => console.log('Backend status:', data));
+
+
 
 // Daily Quiz Component
 const DailyQuiz = ({ theme, onClose }) => {
@@ -766,6 +775,105 @@ const NoteXApp = () => {
     return result;
   };
 
+  // ✅ ADD THIS: Real authentication functions
+  const loginUser = async (username, password = 'temp123') => {
+    try {
+      console.log('Attempting login...');
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      
+      const data = await response.json();
+      console.log('Login response:', data);
+      
+      if (data.success && data.token) {
+        setSessionToken(data.token);
+        localStorage.setItem('notex_token', data.token);
+        
+        const updatedUser = { 
+          ...user, 
+          ...data.user,
+          token: data.token 
+        };
+        setUser(updatedUser);
+        localStorage.setItem('notex_user', JSON.stringify(updatedUser));
+        
+        alert('✅ Login successful!');
+        return true;
+      } else {
+        alert(data.error || 'Login failed');
+        return false;
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      alert('Login failed - using demo mode');
+      return false;
+    }
+  };
+
+  const registerUser = async (username, email, password = 'temp123') => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.token) {
+        setSessionToken(data.token);
+        localStorage.setItem('notex_token', data.token);
+        
+        const newUser = { 
+          id: data.user.id,
+          username: data.user.username,
+          email: data.user.email,
+          plan: 'free',
+          credits: 10,
+          wallet_balance: 0,
+          referral_code: data.user.referral_code,
+          referrals_count: 0,
+          premium_until: null,
+          token: data.token
+        };
+        
+        setUser(newUser);
+        localStorage.setItem('notex_user', JSON.stringify(newUser));
+        
+        alert('✅ Registration successful!');
+        return true;
+      } else {
+        alert(data.error || 'Registration failed');
+        return false;
+      }
+    } catch (error) {
+      console.error('Registration error:', error);
+      alert('Registration failed - using demo mode');
+      return false;
+    }
+  };
+
+  // ✅ ADD THIS: Test token validity
+  const testToken = async (token) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/verify`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        localStorage.removeItem('notex_token');
+        setSessionToken(null);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
   // MISSING FUNCTIONS - NOW ADDED:
   const loadNotes = async () => {
     try {
@@ -853,44 +961,37 @@ const NoteXApp = () => {
   };
 
   // EXISTING FUNCTIONS:
+    // EXISTING FUNCTIONS:
   useEffect(() => {
     // Load theme from localStorage
     const savedTheme = localStorage.getItem('notex_theme') || 'light';
     setTheme(savedTheme);
     document.documentElement.classList.toggle('dark', savedTheme === 'dark');
 
-    // Load or create user with referral code
-    const savedUser = localStorage.getItem('notex_user');
-    if (savedUser) {
-      const userData = JSON.parse(savedUser);
-      setUser(userData);
+    const initializeUser = async () => {
+      const savedUser = localStorage.getItem('notex_user');
+      const savedToken = localStorage.getItem('notex_token');
       
-      // Ensure user has a referral code
-      if (!userData.referral_code) {
-        const newCode = generateReferralCode();
-        const updatedUser = { ...userData, referral_code: newCode };
-        setUser(updatedUser);
-        localStorage.setItem('notex_user', JSON.stringify(updatedUser));
+      if (savedUser && savedToken) {
+        // Try to use existing token
+        const userData = JSON.parse(savedUser);
+        const isValidToken = await testToken(savedToken);
+        
+        if (isValidToken) {
+          setUser(userData);
+          setSessionToken(savedToken);
+        } else {
+          // Token expired, create demo user
+          await createDemoUser();
+        }
+      } else {
+        // No user exists - create demo user
+        await createDemoUser();
       }
-    } else {
-      const newCode = generateReferralCode();
-      const newUser = { 
-        id: Date.now().toString(), 
-        username: 'Student', 
-        plan: 'free',
-        credits: 10,
-        wallet_balance: 0,
-        referral_code: newCode,
-        referrals_count: 0,
-        premium_until: null
-      };
-      setUser(newUser);
-      localStorage.setItem('notex_user', JSON.stringify(newUser));
-    }
-    
-    setSessionToken('token-' + Date.now());
+    };
+
+    initializeUser();
     loadNotes();
-    loadGamificationData();
 
     const lastAdTime = localStorage.getItem('lastAdTime');
     if (lastAdTime) {
